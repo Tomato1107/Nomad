@@ -46,6 +46,7 @@ MotorController *motor_controller = 0;
 static int32_t g_adc1_offset;
 static int32_t g_adc2_offset;
 
+float v_q_current = 0.0f;
 extern "C"
 {
 #include "motor_controller_interface.h"
@@ -301,7 +302,7 @@ void show_motor_config()
 
     printf("\r\nMotor Constants:\r\n");
 
-    printf("\r\n Pole Pairs: %u    K_v: %.2f RPM/V    K_t: %.4f (N*m)/A    K_t_out: %.4f (N*m)/A     Flux Linkage: %.4f Webers\r\n",
+    printf("\r\n Pole Pairs: %lu    K_v: %.2f RPM/V    K_t: %.4f (N*m)/A    K_t_out: %.4f (N*m)/A     Flux Linkage: %.4f Webers\r\n",
            motor->config_.num_pole_pairs,
            motor->config_.K_v,
            motor->config_.K_t,
@@ -350,7 +351,7 @@ void show_controller_config()
 void show_encoder_config()
 {
     printf("\r\nAM5147 Position Sensor Configuration:\r\n");
-    printf("\r\n Encoder CPR: %d", motor->PositionSensor()->config_.cpr);
+    printf("\r\n Encoder CPR: %ld", motor->PositionSensor()->config_.cpr);
     printf("\r\n\r\nSensor Offsets:\r\n");
 
     printf("\r\n Electrical Offset: %.4f rad    Mechanical Offset: %.4f rad\r\n",
@@ -507,8 +508,8 @@ void MotorController::Init()
 
 bool MotorController::CheckErrors()
 {
-    //if (gate_driver_->CheckFaults())
-    //    return true;
+    if (gate_driver_->CheckFaults())
+        return true;
 
     return false;
 }
@@ -533,6 +534,8 @@ void MotorController::StartControlFSM()
             {
                 current_control_mode = control_mode_;
                 LEDService::Instance().Off();
+
+                // TODO: Ramp Down?  Need some kind of braking from high speeds
                 gate_driver_->Disable();
                 EnablePWM(false);
             }
@@ -597,6 +600,8 @@ void MotorController::StartControlFSM()
                 LEDService::Instance().On();
                 gate_driver_->Enable();
                 EnablePWM(true);
+
+                v_q_current = 0.0f;
             }
             if (osSignalWait(CURRENT_MEASUREMENT_COMPLETE_SIGNAL, CURRENT_MEASUREMENT_TIMEOUT).status != osEventSignal)
             {
@@ -634,11 +639,19 @@ void MotorController::StartControlFSM()
 }
 void MotorController::DoMotorControl()
 {
+    int step = 0;
     if (control_mode_ == FOC_VOLTAGE_MODE)
     {
+        dq0(motor_->state_.theta_elec, motor_->state_.I_a, motor_->state_.I_b, motor_->state_.I_c, &state_.I_d, &state_.I_q);
         float v_d = 0.0f;
-        float v_q = 2.0f;
-        SetModulationOutput(motor->state_.theta_elec, v_d, v_q);
+        float v_q = 1.0f;
+        v_q_current += (v_q - v_q_current) * 0.0005;
+        SetModulationOutput(motor->state_.theta_elec, v_d, v_q_current);
+        if(step++ % 1000 == 0) 
+        {
+            printf("Current %.4f", state_.I_q);
+        }
+        //v_q_current = v_q_now;
     }
     else if (control_mode_ == FOC_CURRENT_MODE)
     {
