@@ -1,4 +1,5 @@
 # Firmware TODO:
+1.  Convert to HAL
 1.  Controller priorities.  Make sure communications priorities are straight. 
 2.  Remove all print statements and cleanup old serial
 4.  Verify CAN Messaging
@@ -13,4 +14,3 @@
 13. Gate driver fault checking and reporting ****
 15. Add Bus current ***
 16. Lo Pri - Make RMS Current period configurable?  For now it is 1/10.  Reasonable memory use for 60.0s window.
-
