@@ -184,10 +184,14 @@ class BackgroundUpdater(QtCore.QRunnable, QtCore.QObject):
 
 import serial
 
+
+class CalibraterUpdaterSignals(QtCore.QObject):
+    completed = pyqtSignal(object)
+
 # Torque Calibrater Class
 class TorqueCalibrater(QtCore.QRunnable, QtCore.QObject):
     
-    def __init__(self, nomad_device, arm_length=0.5, num_steps=24, start_current=1.0, end_current=25):
+    def __init__(self, nomad_device, arm_length=0.5, num_steps=5, start_current=1.0, end_current=10):
         super(TorqueCalibrater, self).__init__()
         self.nomad_dev = nomad_device
         self.serial = serial.Serial(port="/dev/ttyACM1", baudrate=9600, timeout=1)
@@ -197,7 +201,7 @@ class TorqueCalibrater(QtCore.QRunnable, QtCore.QObject):
         self.end_current = end_current
         self.torques = []
         self.currents = []
-        #self.signals = BackgroundUpdaterSignals()
+        self.signals = CalibraterUpdaterSignals()
         #self.period = 0.5
         #self.paused = False
 
@@ -233,6 +237,8 @@ class TorqueCalibrater(QtCore.QRunnable, QtCore.QObject):
         print(Kt)
         print(np.mean(Kt))
 
+        self.signals.completed.emit(np.mean(Kt))
+
         pg.setConfigOption('background', 'w')
         pg.setConfigOption('foreground', 'k')
         pg.setConfigOption('antialias', True)
@@ -244,6 +250,8 @@ class TorqueCalibrater(QtCore.QRunnable, QtCore.QObject):
 
         pw.setLabel('left', 'Torque', 'N*m')
         pw.setLabel('bottom', 'Current', 'A')
+
+
 
 
     def read_scale(self, num_samples):
@@ -339,20 +347,23 @@ class NomadBLDCGUI(QtWidgets.QMainWindow):
         #self.rt_plotter.AddData((self.nomad_dev, "motor_state.I_b"), title='I(b)', row=1, col=0)
         #self.rt_plotter.AddData((self.nomad_dev, "motor_state.I_c"), title='I(c)', row=2, col=0)
 
-        #self.rt_plotter.AddData((self.nomad_dev, "controller_state.Pos_ref"), title='Postion', name='Pos Ref', units='rads', legend=True, row=0, col=0, pen=pg.mkPen('r', width=2))
-        #self.rt_plotter.AddData((self.nomad_dev, "motor_state.theta_mech"), title='Position', name='Pos', units='rads', legend=True, row=0, col=0, pen=pg.mkPen('b', width=2))
-        self.rt_plotter.AddData((self.nomad_dev, "controller_state.I_q"), title='Q Axis Current', name='I(q)', units='A', legend=True, row=0, col=0, pen=pg.mkPen('b', width=2))
-        self.rt_plotter.AddData((self.nomad_dev, "controller_state.I_q_ref"), title='Q Axis Current', name='I(q) ref', units='A', legend=True, row=0, col=0, pen=pg.mkPen('r', width=2))
+        self.rt_plotter.AddData((self.nomad_dev, "controller_state.Pos_ref"), title='Postion', name='Pos Ref', units='rads', legend=True, row=0, col=0, pen=pg.mkPen('r', width=2))
+        self.rt_plotter.AddData((self.nomad_dev, "motor_state.theta_mech"), title='Position', name='Pos', units='rads', legend=True, row=0, col=0, pen=pg.mkPen('b', width=2))
+        self.rt_plotter.AddData((self.nomad_dev, "motor_state.theta_mech_dot"), title='Velocity', name='Vel', units='rads/s', legend=True, row=0, col=0, pen=pg.mkPen('g', width=2))
+        #self.rt_plotter.AddData((self.nomad_dev, "controller_state.I_q"), title='Q Axis Current', name='I(q)', units='A', legend=True, row=0, col=0, pen=pg.mkPen('b', width=2))
+        #self.rt_plotter.AddData((self.nomad_dev, "controller_state.I_q_ref"), title='Q Axis Current', name='I(q) ref', units='A', legend=True, row=0, col=0, pen=pg.mkPen('r', width=2))
 
         #self.rt_plotter.AddData((self.nomad_dev, "controller_state.I_max"), title='Max Current Demand', name='I(max)', units='A', legend=True, row=1, col=0, pen=pg.mkPen('g', width=2))
         self.rt_plotter.AddData((self.nomad_dev, "controller_state.I_rms"), title='Motor RMS Current', name='I(rms)', units='A', legend=True, row=1, col=0, pen=pg.mkPen('r', width=2))
         self.rt_plotter.AddData((self.nomad_dev, "controller_state.I_q"), title='Q Axis Current', name='I(q)', units='A', legend=True, row=1, col=0, pen=pg.mkPen('b', width=2))
+        self.rt_plotter.AddData((self.nomad_dev, "controller_state.I_q_ref"), title='Q Axis Current', name='I(q) ref', units='A', legend=True, row=0, col=0, pen=pg.mkPen('r', width=2))
 
         # Start Updater
         self.updater = BackgroundUpdater(self.nomad_dev)
         self.updater.period = 0.05 # Seconds
         self.updater.signals.updated.connect(self.UpdateSlot)
         self.updater.signals.updated_state.connect(self.UpdateState)
+
         
         self.threadpool.start(self.updater)
 
@@ -776,14 +787,25 @@ class NomadBLDCGUI(QtWidgets.QMainWindow):
         self.EnterIdleMode()
         time.sleep(2)
 
-        t_calc = TorqueCalibrater(self.nomad_dev)
+        t_calc = TorqueCalibrater(self.nomad_dev, self.torqueSweepArmVal.value(), self.torqueSweepSteps.value(),self.torqueSweepStartCurrent.value(), self.torqueSweepEndCurrent.value())
+        t_calc.signals.completed.connect(self.TorqueCompleted)
         self.threadpool.start(t_calc)
+
+    def TorqueCompleted(self, Kt):
+        
+        msgBox = QtWidgets.QMessageBox()
+        msgBox.setIcon(QtWidgets.QMessageBox.Information)
+        msgBox.setText("Calibrated Motor Torque Constant: {:0.2f} N-m/A".format(Kt))
+        msgBox.setWindowTitle("Nomad BLDC")
+        msgBox.setStandardButtons(QtWidgets.QMessageBox.Ok)
+        msgBox.exec()
+
 
         # Connect to Scale
     def DoThermalTest(self):
         print("Thermal Test")
-        self.nomad_dev.start_current_control()
-        self.nomad_dev.set_current_setpoint(0, 12) 
+        #self.nomad_dev.start_current_control()
+        #self.nomad_dev.set_current_setpoint(0, 12) 
 
 
 if __name__ == '__main__':
